@@ -1,0 +1,357 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>音楽再生アプリ</title>
+  <style>
+    /* スタイルは必要に応じて追加してください */
+    .playing {
+      color: red;
+    }
+    .stopped {
+      color: black;
+    }
+    .recording-indicator {
+      color: red;
+      margin-left: 5px;
+    }
+
+
+body {
+    font-family: 'Arial', sans-serif;
+    margin: 20px;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+
+  h1 {
+    margin-bottom: 5px;
+  }
+
+  p {
+    margin-top: 0;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 5px;
+  }
+
+  input[type="checkbox"] {
+    margin-bottom: 10px;
+  }
+
+  button {
+    margin-right: 10px;
+  }
+
+  #introDurationInput {
+    width: 50px;
+  }
+
+  #songList {
+    margin-top: 20px;
+  }
+
+  /* チェックボックスとラベルを同じ行に配置 */
+  label[for="enableClickMode"] {
+    display: inline-block;
+    vertical-align: middle;
+  }
+
+
+</style>
+</head>
+<body>
+
+
+<header>
+  <h1>音楽再生アプリ</h1>
+  <p>aキー：イントロモード ／ Enter：曲選択／ 右クリック：曲削除</p>
+
+</header>
+
+
+<!-- チェックボックスを追加 -->
+<input type="checkbox" id="enableClickMode" checked><label for="enableClickMode">曲の決定にマウス左クリックを使う</label>
+<button id="loadSongButton">曲を追加</button>
+<button id="recordButton">録音</button>
+<button id="downloadRecordingButton" style="display: none;">保存</button>
+<span id="recordingStatus" class="recording-indicator" style="display: none;">
+  <span class="recording-symbol" style="color: red;">●</span>
+  <span class="recording-text" style="color: black;">録音中・・・</span>
+</span>
+
+<div id="songList"></div>
+<label for="introDurationInput">イントロ時間（秒）：</label>
+<input type="number" id="introDurationInput" value="3" min="1">
+
+<script>
+  const playlist = [];
+  const songListElement = document.getElementById('songList');
+  const recordingStatusElement = document.getElementById('recordingStatus');
+  const downloadRecordingButton = document.getElementById('downloadRecordingButton');
+  let audio;
+  let currentSongIndex = 0;
+  let playingTimer;
+  let introDurationInput = document.getElementById('introDurationInput');
+  let introDuration = parseInt(introDurationInput.value) * 1000; // イントロ時間をミリ秒で表す変数
+  let mediaRecorder;
+
+  // チェックボックスの状態を取得
+  const enableClickModeCheckbox = document.getElementById('enableClickMode');
+  let enableClickMode = enableClickModeCheckbox.checked;
+
+  // チェックボックスの状態が変更されたときに更新
+  enableClickModeCheckbox.addEventListener('change', () => {
+    enableClickMode = enableClickModeCheckbox.checked;
+  });
+
+  const recordButton = document.getElementById('recordButton');
+  recordButton.addEventListener('click', () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  });
+
+  downloadRecordingButton.addEventListener('click', downloadRecording);
+
+  document.getElementById('loadSongButton').addEventListener('click', () => {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'audio/*';
+    fileInput.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (file) {
+        const song = {
+          name: file.name.replace(/\.[^/.]+$/, ''), // 拡張子を削除して保存
+          src: URL.createObjectURL(file),
+          blob: new Blob([file], { type: file.type }), // Blobデータを保存
+        };
+        playlist.push(song);
+        displaySongList();
+      }
+    });
+    fileInput.click();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'a' && playlist.length > 0) {
+      if (audio && !audio.paused) {
+        stopMusic(); // もし再生中なら停止
+      } else {
+        if (!audio) {
+          audio = new Audio();
+        }
+        playIntroMode();
+      }
+    } else if (event.key === 'Enter' && playlist.length > 0) {
+      playSongMode();
+    }
+  });
+
+  document.addEventListener('mousedown', (event) => {
+    if (event.key === 'a' && playlist.length > 0) {
+      if (audio && !audio.paused) {
+        stopMusic(); // もし再生中なら停止
+      } else {
+        if (!audio) {
+          audio = new Audio();
+        }
+        playIntroMode();
+      }
+    } else if (event.button === 0 && playlist.length > 0 && enableClickMode) {
+      playSongMode();
+    }
+  });
+
+  function startRecording() {
+    const fileName = prompt('ファイル名を入力してください:', 'Recorded_Audio');
+    if (!fileName) {
+      return; // キャンセルされた場合は録音を開始しない
+    }
+
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then((stream) => {
+        mediaRecorder = new MediaRecorder(stream);
+        const chunks = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) {
+            chunks.push(e.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(chunks, { type: 'audio/wav' });
+          const url = URL.createObjectURL(blob);
+
+          const recordedSong = {
+            name: fileName,
+            src: url,
+            blob: blob, // Blobデータを保存
+          };
+
+          playlist.push(recordedSong);
+          displaySongList();
+          showDownloadButton(); // 保存ボタンを表示
+        };
+
+        mediaRecorder.start();
+        recordButton.textContent = '録音停止'; // ボタンの表示を変更
+        recordingStatusElement.style.display = 'inline'; // 録音中の表示を有効化
+      })
+      .catch((err) => {
+        console.error('録音エラー:', err);
+      });
+  }
+
+  function stopRecording() {
+    mediaRecorder.stop();
+    recordButton.textContent = '録音'; // ボタンの表示を変更
+    recordingStatusElement.style.display = 'none'; // 録音中の表示を非表示に
+  }
+
+  function displaySongList() {
+    songListElement.innerHTML = ''; // 一覧をクリア
+
+    playlist.forEach((song, index) => {
+      const listItem = document.createElement('div');
+      listItem.textContent = `${index + 1}. ${song.name}`;
+      listItem.classList.add('stopped'); // 最初は全ての曲を停止状態として黒で表示
+
+      // クリックで再生
+      listItem.addEventListener('click', () => playBlob(song.blob));
+
+      // 右クリックで削除
+      listItem.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+        confirmDelete(song.name, index);
+      });
+
+      songListElement.appendChild(listItem);
+    });
+  }
+
+  function confirmDelete(songName, index) {
+    const result = confirm(`"${songName}" を削除しますか？`);
+    if (result) {
+      deleteSong(index);
+    }
+  }
+
+  function deleteSong(index) {
+    playlist.splice(index, 1);
+    displaySongList();
+  }
+
+  function playIntroMode() {
+    if (currentSongIndex >= playlist.length) {
+      currentSongIndex = 0; // 再生リストの最後まで行ったら最初の曲に戻る
+    }
+
+    // 曲名の文字色を黒に戻す
+    const previousListItem = songListElement.children[currentSongIndex];
+    if (previousListItem) {
+      previousListItem.classList.remove('playing');
+      previousListItem.classList.add('stopped');
+    }
+
+    audio.src = playlist[currentSongIndex].src;
+    audio.load();
+    audio.play();
+
+    // 曲名の文字色を赤にする
+    const currentListItem = songListElement.children[currentSongIndex];
+    if (currentListItem) {
+      currentListItem.classList.remove('stopped');
+      currentListItem.classList.add('playing');
+    }
+
+    // イントロモードに移行するためのタイマー
+    playingTimer = setTimeout(() => {
+      stopMusic();
+      currentSongIndex++;
+      introDuration = parseInt(introDurationInput.value) * 1000; // イントロ時間を更新
+      playIntroMode();
+    }, introDuration);
+  }
+
+  function playSongMode() {
+    stopMusic(); // 他のモードから入った場合は一旦停止
+
+    // 曲名の文字色を赤にする
+    const currentListItem = songListElement.children[currentSongIndex];
+    if (currentListItem) {
+      currentListItem.classList.remove('stopped');
+      currentListItem.classList.add('playing');
+    }
+
+    // 曲再生モードに移行
+    audio.src = playlist[currentSongIndex].src;
+    audio.load();
+    audio.play();
+
+    // 再生が終わったら停止して2秒待ってから自動でイントロモードに戻る
+    audio.addEventListener('ended', () => {
+      stopMusic();
+      setTimeout(() => {
+        playIntroMode();
+      }, 2000);
+    });
+  }
+
+  function stopMusic() {
+    if (audio) {
+      clearTimeout(playingTimer); // タイマーをクリア
+
+      audio.pause();
+      audio.currentTime = 0;
+
+      // 再生中の曲名の文字色を黒に戻す
+      const playingListItem = songListElement.children[currentSongIndex];
+      if (playingListItem) {
+        playingListItem.classList.remove('playing');
+        playingListItem.classList.add('stopped');
+      }
+    }
+  }
+
+  function showDownloadButton() {
+    downloadRecordingButton.style.display = 'inline'; // 保存ボタンを表示
+  }
+
+  function downloadRecording() {
+    if (playlist.length > 0) {
+      const blob = playlist[playlist.length - 1].blob; // Blobデータを取得
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${playlist[playlist.length - 1].name}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      // 保存ボタンを非表示にする
+      downloadRecordingButton.style.display = 'none';
+    }
+  }
+
+  function playBlob(blob) {
+    const audio = new Audio();
+    const url = URL.createObjectURL(blob);
+    audio.src = url;
+    audio.play();
+  }
+</script>
+
+</body>
+</html>
